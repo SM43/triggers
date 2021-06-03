@@ -28,6 +28,7 @@ import (
 	"go.uber.org/zap"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"knative.dev/pkg/injection"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/signals"
 )
@@ -49,6 +50,8 @@ func main() {
 		log.Fatalf("Failed to build config: %v", err)
 	}
 
+	ctx, startInformer := injection.EnableInjectionOrDie(ctx, clusterConfig)
+
 	kubeClient, err := kubernetes.NewForConfig(clusterConfig)
 	if err != nil {
 		log.Fatalf("Failed to get the Kubernetes client set: %v", err)
@@ -66,11 +69,13 @@ func main() {
 		}
 	}()
 
-	service, err := server.NewWithCoreInterceptors(kubeClient, logger)
+	service, err := server.NewWithCoreInterceptors(ctx, kubeClient, logger)
 	if err != nil {
 		log.Printf("failed to initialize core interceptors: %s", err)
 		return
 	}
+	startInformer()
+
 	mux := http.NewServeMux()
 	mux.Handle("/", service)
 	mux.HandleFunc("/ready", handler)

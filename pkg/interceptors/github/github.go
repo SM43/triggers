@@ -19,15 +19,16 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"google.golang.org/grpc/codes"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	gh "github.com/google/go-github/v31/github"
 	triggersv1 "github.com/tektoncd/triggers/pkg/apis/triggers/v1alpha1"
 	"github.com/tektoncd/triggers/pkg/interceptors"
 	"go.uber.org/zap"
 	"k8s.io/client-go/kubernetes"
+	corev1lister "k8s.io/client-go/listers/core/v1"
 )
 
 var _ triggersv1.InterceptorInterface = (*Interceptor)(nil)
@@ -38,12 +39,14 @@ var ErrInvalidContentType = errors.New("form parameter encoding not supported, p
 type Interceptor struct {
 	KubeClientSet kubernetes.Interface
 	Logger        *zap.SugaredLogger
+	SecretLister  corev1lister.SecretLister
 }
 
-func NewInterceptor(k kubernetes.Interface, l *zap.SugaredLogger) *Interceptor {
+func NewInterceptor(k kubernetes.Interface, l *zap.SugaredLogger, s corev1lister.SecretLister) *Interceptor {
 	return &Interceptor{
 		Logger:        l,
 		KubeClientSet: k,
+		SecretLister:  s,
 	}
 }
 
@@ -69,8 +72,15 @@ func (w *Interceptor) Process(ctx context.Context, r *triggersv1.InterceptorRequ
 		}
 
 		ns, _ := triggersv1.ParseTriggerID(r.Context.TriggerID)
-		secret, err := w.KubeClientSet.CoreV1().Secrets(ns).Get(ctx, p.SecretRef.SecretName, metav1.GetOptions{})
+		//secret, err := w.KubeClientSet.CoreV1().Secrets(ns).Get(ctx, p.SecretRef.SecretName, metav1.GetOptions{})
+
+		secret, err := w.SecretLister.Secrets(ns).Get(p.SecretRef.SecretName)
+		fmt.Println("----------------------------------------------------------------------")
+		fmt.Println("found secret - ", secret.Data)
+		fmt.Println("----------------------------------------------------------------------")
+
 		if err != nil {
+			fmt.Println("err----------------------------------------------------------------------")
 			return interceptors.Failf(codes.FailedPrecondition, "error getting secret: %v", err)
 		}
 		secretToken := secret.Data[p.SecretRef.SecretKey]
