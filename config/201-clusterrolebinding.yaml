@@ -21,7 +21,8 @@ metadata:
     app.kubernetes.io/part-of: tekton-triggers
 subjects:
   - kind: ServiceAccount
-    name: tekton-triggers-controller
+    name:
+    tekton-triggers-controller
     namespace: tekton-pipelines
 roleRef:
   kind: ClusterRole

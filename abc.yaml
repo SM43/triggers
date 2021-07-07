@@ -1,0 +1,8 @@
+---
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: SyncRepo
+metadata:
+  name: abc
+spec:
+  repo: https://github.com/tektoncd/hub
+  frequency: freq
