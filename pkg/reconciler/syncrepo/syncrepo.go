@@ -19,13 +19,22 @@ package syncrepo
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/tektoncd/triggers/pkg/apis/triggers/v1alpha1"
+	v1beta12 "github.com/tektoncd/triggers/pkg/apis/triggers/v1beta1"
 	triggersclientset "github.com/tektoncd/triggers/pkg/client/clientset/versioned"
 	"github.com/tektoncd/triggers/pkg/client/injection/reconciler/triggers/v1alpha1/syncrepo"
+	"github.com/tektoncd/triggers/pkg/resources"
+	"github.com/tektoncd/triggers/pkg/template"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	discoveryclient "k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"knative.dev/pkg/logging"
@@ -41,14 +50,22 @@ var (
 
 // Reconciler implements controller.Reconciler for Configuration resources.
 type Reconciler struct {
+	DiscoveryClient   discoveryclient.ServerResourcesInterface
 	DynamicClientSet  dynamic.Interface
 	KubeClientSet     kubernetes.Interface
 	TriggersClientSet triggersclientset.Interface
+	Requeue           func(obj interface{}, after time.Duration)
 }
 
 func (r *Reconciler) ReconcileKind(ctx context.Context, sr *v1alpha1.SyncRepo) pkgreconciler.Event {
 
 	logger := logging.FromContext(ctx)
+
+	fmt.Println("************************************************************")
+	fmt.Println("************************************************************")
+	fmt.Println("What's the time :P ", time.Now())
+	fmt.Println("************************************************************")
+	fmt.Println("************************************************************")
 
 	res, err := r.TriggersClientSet.TriggersV1alpha1().SyncRepos(sr.Namespace).Get(ctx, sr.Name, metav1.GetOptions{})
 	if err != nil {
@@ -69,7 +86,13 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, sr *v1alpha1.SyncRepo) p
 	var gc []map[string]interface{}
 	err = json.Unmarshal(data, &gc)
 	if err != nil {
-		logger.Error("Error occurred while json chi marshalling: ", err)
+		logger.Error("Error occurred while json chi unmarshalling: ", err)
+		return err
+	}
+
+	abyte, err := json.Marshal(gc[0])
+	if err != nil {
+		logger.Error("Error occurred while interface chi marshalling: ", err)
 		return err
 	}
 
@@ -77,6 +100,66 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, sr *v1alpha1.SyncRepo) p
 
 	// https://api.github.com/repos/{owner}/{repo}
 	// https://api.github.com/repos/tektoncd/hub/commits
+
+	tb, err := r.TriggersClientSet.TriggersV1beta1().TriggerBindings("default").Get(ctx, "pipeline-binding", metav1.GetOptions{})
+	if err != nil {
+		logger.Error("Error occurred while getting tb: ", err)
+		return err
+	}
+	logger.Info("----found tb ", tb.Spec.Params)
+
+	p, err := template.ApplyEventValuesToParams(tb.Spec.Params, abyte, http.Header{}, map[string]interface{}{}, []v1beta12.ParamSpec{})
+	if err != nil {
+		logger.Error("templating failed ", err)
+		return err
+	}
+
+	tt, err := r.TriggersClientSet.TriggersV1beta1().TriggerTemplates("default").Get(ctx, "pipeline-template", metav1.GetOptions{})
+	if err != nil {
+		logger.Error("Error occurred while getting tb: ", err)
+		return err
+	}
+
+	logger.Infof("ResolvedParams : %+v", p)
+	resolvedRes := template.ResolveResources(tt, p)
+
+	for _, re := range resolvedRes {
+		data := new(unstructured.Unstructured)
+		if err := data.UnmarshalJSON(re); err != nil {
+			return fmt.Errorf("couldn't unmarshal json from the TriggerTemplate: %v", err)
+		}
+
+		logger.Info("trigger template data : ", data)
+
+		apiResource, err := resources.FindAPIResource(data.GetAPIVersion(), data.GetKind(), r.DiscoveryClient)
+		if err != nil {
+			logger.Error("Error occurred while api resource: ", err)
+			return err
+		}
+
+		name := data.GetName()
+		if name == "" {
+			name = data.GetGenerateName()
+		}
+		logger.Infof("Generating resource: kind: %s, name: %s", apiResource, name)
+
+		gvr := schema.GroupVersionResource{
+			Group:    apiResource.Group,
+			Version:  apiResource.Version,
+			Resource: apiResource.Name,
+		}
+
+		if _, err := r.DynamicClientSet.Resource(gvr).Namespace("default").Create(context.Background(), data, metav1.CreateOptions{}); err != nil {
+			if kerrors.IsUnauthorized(err) || kerrors.IsForbidden(err) {
+				return err
+			}
+			return fmt.Errorf("couldn't create resource with group version kind %q: %v", gvr, err)
+		}
+	}
+
+	logger.Info("Now I am queuing .... yay !!!")
+	r.Requeue(sr, time.Minute)
+	logger.Info("See you after a minute .... !!!")
 
 	return nil
 }

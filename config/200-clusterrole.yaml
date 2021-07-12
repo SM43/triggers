@@ -42,6 +42,9 @@ rules:
   - apiGroups: ["serving.knative.dev"]
     resources: ["*", "*/status", "*/finalizers"]
     verbs: ["get", "list", "create", "update", "delete", "deletecollection", "patch", "watch"]
+  - apiGroups: [ "tekton.dev" ]
+    resources: [ "pipelineruns" ]
+    verbs: [ "get", "list", "create", "update", "delete", "patch", "watch" ]
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
